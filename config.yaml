@@ -1,0 +1,181 @@
+# Windows 长时间不关机自动性能优化与闭环迭代系统配置文件
+# Windows Long-Uptime Automated Performance Optimizer Configuration
+
+schedule:
+  interval_hours: 12
+  task_name: "WinLongUptimeOptimizer"
+  execution_time_limit_minutes: 30
+
+guard:
+  enabled: true
+  # CPU / GPU 占用超过阈值时自动降级为保守模式，避免影响正在运行的重负载任务
+  cpu_busy_threshold_pct: 65.0
+  gpu_busy_threshold_pct: 55.0
+  downgrade_to_conservative_when_busy: true
+  # 工程模拟、CAD/CAE、DCC 创作、大型游戏进程关键词（不区分大小写，匹配进程名主干）
+  heavy_app_processes:
+    - ansys
+    - fluent
+    - abaqus
+    - comsol
+    - solidworks
+    - sldworks
+    - matlab
+    - autocad
+    - acad
+    - revit
+    - catia
+    - nx
+    - ugraf
+    - creo
+    - blender
+    - unreal
+    - ue4editor
+    - unrealeditor
+    - unity
+    - houdini
+    - maya
+    - 3dsmax
+    - davinci
+    - resolve
+    - premiere
+    - afterfx
+    - cyberpunk2077
+    - eldenring
+    - blackmyth
+    - b1-win64-shipping
+    - valorant
+    - cs2
+    - genshinimpact
+    - starrail
+    - forza
+    - flightsimulator
+    - starcitizen
+    - dcs
+    - rdr2
+    - gta5
+    - hogwartslegacy
+    - monsterhunter
+    - wukong
+
+memory:
+  # Standby List 达到该阈值(MB)以上时执行清理（避免频繁无效刷新）
+  standby_purge_min_mb: 1536
+  flush_modified_list: true
+  modified_flush_min_mb: 64
+  combine_physical_memory: true
+  purge_low_priority_standby_only_in_conservative: true
+
+working_set:
+  enabled: true
+  # 仅修剪满足以下全部条件且不在保护名单中的后台闲置进程工作集
+  min_working_set_mb: 120
+  min_uptime_seconds: 300
+  max_cpu_pct_for_trim: 2.0
+  # 核心系统、桌面合成、终端、IDE、安全软件保护名单（绝不修剪，绝不自动查杀）
+  protected_processes:
+    - system
+    - registry
+    - idle
+    - smss.exe
+    - csrss.exe
+    - wininit.exe
+    - services.exe
+    - lsass.exe
+    - lsaext.exe
+    - svchost.exe
+    - dwm.exe
+    - explorer.exe
+    - audiodg.exe
+    - taskmgr.exe
+    - python.exe
+    - pythonw.exe
+    - powershell.exe
+    - pwsh.exe
+    - cmd.exe
+    - windowsterminal.exe
+    - antigravity.exe
+    - code.exe
+    - conhost.exe
+    - ctfmon.exe
+    - hipsdaemon.exe
+    - hipsmain.exe
+    - searchindexer.exe
+    - searchhost.exe
+    - startmenuexperiencehost.exe
+    - shellexperiencehost.exe
+    - textinputhost.exe
+    - fontdrvhost.exe
+    - memory compression
+    - nvcontainer.exe
+    - nvdisplay.container.exe
+    - nvidia overlay.exe
+    - todesk_service.exe
+    - todesk.exe
+
+gpu:
+  # 后台非重负载进程显存告警阈值 (MB)
+  vram_hog_warn_mb: 500
+  dwm_vram_warn_mb: 600
+  clean_stale_shader_temp: true
+  # 仅清理超过30天未使用的陈旧临时着色器/崩溃残留，绝不误删近期活跃游戏着色器缓存
+  shader_temp_max_age_days: 30
+
+storage:
+  clean_temp_files: true
+  temp_min_age_hours: 24
+  clean_wer_dumps: true
+  ssd_retrim_enabled: true
+  ssd_retrim_min_interval_hours: 24
+  min_free_disk_pct: 15.0
+
+network:
+  flush_dns: true
+  socket_warn_threshold: 2000
+
+cpu_power:
+  audit_power_plan: true
+  switch_high_perf_in_boost_mode: true
+  # 仅当以下后台更新器 CPU > 10% 且非保守模式时适度降优先级（不杀进程）
+  background_demote_processes:
+    - onedrivesetup.exe
+    - googleupdate.exe
+    - microsoftedgeupdate.exe
+    - tiworker.exe
+    - trustedinstaller.exe
+    - msiexec.exe
+
+verification:
+  # 优化后等待回弹稳定的秒数
+  settle_seconds: 20
+  run_micro_benchmarks: true
+  alloc_bench_mb: 128
+  # 单个进程工作集回弹比例 >= 70% 时标记为“高频回弹进程”
+  rebound_threshold_ratio: 0.70
+
+leak_detection:
+  min_samples_for_trend: 2
+  private_mb_per_hour_warn: 20.0
+  private_mb_per_hour_crit: 80.0
+  private_abs_warn_mb: 2500
+  handle_warn_count: 5000
+  handle_per_hour_warn: 100.0
+  gdi_warn_count: 2000
+  user_obj_warn_count: 2000
+  vram_warn_mb: 800
+  vram_per_hour_warn: 30.0
+  nonpaged_pool_warn_mb: 1200
+  commit_pct_warn: 75.0
+  commit_pct_crit: 88.0
+
+iteration:
+  enabled: true
+  # 连续回弹达到指定次数后自动加入动态修剪排除列表
+  rebound_exclude_strikes: 2
+  # 若策略迭代后同配置下就绪度评分下降超过阈值或内存分配延迟飙升，自动回滚到上一已知良好策略
+  rollback_score_drop_threshold: 5.0
+  rollback_alloc_latency_increase_pct: 35.0
+  bounds:
+    standby_purge_min_mb: [512, 4096]
+    min_working_set_mb: [60, 512]
+    min_uptime_seconds: [120, 1800]

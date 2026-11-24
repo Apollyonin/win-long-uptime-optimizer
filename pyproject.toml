@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "winopt"
+version = "0.1.0"
+description = "Windows 12-hour Automated Long-Uptime Performance Optimizer & Self-Iterating Feedback System"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "psutil>=6.0.0",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+winopt = "winopt.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["winopt*"]

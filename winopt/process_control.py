@@ -17,6 +17,7 @@ from winopt.win32_native import (
     IS_WINDOWS,
     empty_process_working_set,
     enable_privileges,
+    get_current_desktop_info,
     post_wm_close_to_pids,
 )
 
@@ -73,7 +74,14 @@ UNSAVED_WORK_RISK_PROCESSES: frozenset[str] = frozenset(
     }
 )
 
+CHROMIUM_BROWSERS: frozenset[str] = frozenset({"chrome.exe", "msedge.exe", "brave.exe"})
+
+CLI_TEST_SAFE_PROCESSES: frozenset[str] = frozenset(
+    {"python.exe", "pythonw.exe", "cmd.exe", "powershell.exe", "pwsh.exe"}
+)
+
 _DETACHED_FLAGS = 0x00000008 | 0x00000200 if IS_WINDOWS else 0
+_GUI_RELAUNCH_FLAGS = 0x00000200 if IS_WINDOWS else 0
 
 
 def get_self_lineage_pids() -> set[int]:
@@ -189,12 +197,33 @@ def resolve_targets_by_scope(pid: int, scope: str = "tree") -> tuple[psutil.Proc
 
 
 def build_relaunch_command(exe: str, cmdline: list[str], name: str) -> list[str]:
-    """Build a safe relaunch command, stripping internal Chromium/Electron child flags."""
+    """Build a safe relaunch command, stripping internal/transient Chromium flags."""
     lname = (name or "").strip().lower()
     if lname == "explorer.exe":
         return ["explorer.exe"]
 
     clean_exe = (exe or "").strip()
+    if not clean_exe and cmdline:
+        cand = str(cmdline[0]).strip()
+        if cand and Path(cand).exists():
+            clean_exe = cand
+
+    if lname in CHROMIUM_BROWSERS:
+        if not clean_exe or not Path(clean_exe).exists():
+            return []
+        safe_flags: list[str] = []
+        i = 1
+        args = cmdline or []
+        while i < len(args):
+            arg = str(args[i])
+            if arg.startswith("--profile-directory=") or arg.startswith("--user-data-dir="):
+                safe_flags.append(arg)
+            elif arg in ("--profile-directory", "--user-data-dir") and (i + 1) < len(args):
+                safe_flags.extend([arg, str(args[i + 1])])
+                i += 1
+            i += 1
+        return [clean_exe, *safe_flags]
+
     is_internal_child = any(str(arg).startswith("--type=") for arg in (cmdline or []))
 
     if not is_internal_child and cmdline:
@@ -463,6 +492,23 @@ def safe_restart_target(
     root_name = root.name()
     root_name_lower = root_name.lower()
 
+    # Non-default desktop guard: never relaunch GUI apps onto an isolated/invisible desktop!
+    if IS_WINDOWS and relaunch and root_name_lower not in CLI_TEST_SAFE_PROCESSES:
+        desk = get_current_desktop_info()
+        if not desk["is_default_desktop"]:
+            return {
+                "ok": False,
+                "http_status": 409,
+                "target_name": root_name,
+                "target_pid": root.pid,
+                "message": (
+                    f"当前 Web 控制台运行在非交互/隔离桌面 ({desk['window_station']}\\{desk['desktop']})，"
+                    f"在此环境中重启 GUI 应用 ({root_name}) 会导致窗口不可见并锁死应用配置！"
+                    "请先关闭当前后台服务，改在正常 Windows 桌面双击 start_web_console.bat "
+                    "或在系统终端运行 python -m winopt.cli web --open 后再操作。"
+                ),
+            }
+
     # Validate EVERY member against FORBIDDEN and self-lineage
     for proc in targets:
         try:
@@ -505,10 +551,11 @@ def safe_restart_target(
     old_pids = {p.pid for p in targets}
     start_wall = time.time()
 
-    # Phase 1: Graceful WM_CLOSE -> terminate -> wait -> kill survivors
+    # Phase 1: Graceful WM_CLOSE wait -> terminate survivors -> force kill stubborn PIDs
     if IS_WINDOWS and root_name_lower != "explorer.exe":
-        post_wm_close_to_pids(old_pids)
-        time.sleep(0.35)
+        wm_sent = post_wm_close_to_pids(old_pids)
+        if wm_sent > 0:
+            psutil.wait_procs(targets, timeout=max(0.5, graceful_timeout_s))
 
     alive_procs: list[psutil.Process] = []
     for p in targets:
@@ -519,7 +566,7 @@ def safe_restart_target(
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
 
-    _, still_alive = psutil.wait_procs(alive_procs, timeout=max(0.5, graceful_timeout_s))
+    _, still_alive = psutil.wait_procs(alive_procs, timeout=min(2.0, max(0.5, graceful_timeout_s)))
     killed_force = 0
     for p in still_alive:
         try:
@@ -531,7 +578,12 @@ def safe_restart_target(
     if still_alive:
         psutil.wait_procs(still_alive, timeout=1.5)
 
-    time.sleep(0.7)
+    time.sleep(0.8)
+    if root_name_lower in CHROMIUM_BROWSERS:
+        # Ensure Chromium User Data lockfile holders from old_pids have fully exited
+        lingering = [psutil.Process(op) for op in old_pids if psutil.pid_exists(op)]
+        if lingering:
+            psutil.wait_procs(lingering, timeout=1.5)
 
     # Phase 2: Relaunch if requested
     new_pid: int | None = None
@@ -546,15 +598,25 @@ def safe_restart_target(
 
         if new_pid is None:
             try:
-                proc_new = subprocess.Popen(
-                    relaunch_cmd,
-                    cwd=cwd,
-                    creationflags=_DETACHED_FLAGS,
-                    close_fds=True,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                popen_kwargs: dict[str, Any] = {
+                    "cwd": cwd,
+                    "close_fds": True,
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL,
+                }
+                if IS_WINDOWS:
+                    si = subprocess.STARTUPINFO()
+                    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                    si.wShowWindow = 1  # SW_SHOWNORMAL
+                    popen_kwargs["startupinfo"] = si
+                    popen_kwargs["creationflags"] = (
+                        _DETACHED_FLAGS
+                        if root_name_lower in CLI_TEST_SAFE_PROCESSES
+                        else _GUI_RELAUNCH_FLAGS
+                    )
+
+                proc_new = subprocess.Popen(relaunch_cmd, **popen_kwargs)
                 time.sleep(0.7)
                 if proc_new.poll() is None:
                     new_pid = proc_new.pid

@@ -64,9 +64,12 @@ python -m winopt.cli schedule uninstall
 ```
 
 ### 6. 启动本地交互式 Web 控制台（推荐）
+在正常 Windows 交互桌面双击 [start_web_console.bat](start_web_console.bat)，或在系统终端运行：
 ```powershell
 python -m winopt.cli web --open
 ```
+> **说明**：涉及重启桌面 GUI 应用（如 Chrome/Edge/软件窗口）时，控制台必须在正常桌面会话 (`WinSta0\Default`) 启动，新拉起的软件窗口才会正常显示在前台；若运行在隔离桌面/非交互沙箱，控制台会自动拦截 GUI 重启以防隐身窗口锁死。
+
 浏览器打开 `http://127.0.0.1:18765/` 后可使用：
 - **手动一键清理按键**：立即执行完整闭环优化 (`T0→T2`)、大软件/游戏战前加速 (`Boost`)、快速释放内存 (`Standby + 工作集`)。
 - **高占用/泄漏进程与进程树安全治理**：

@@ -28,6 +28,7 @@ from winopt.process_control import (
 from winopt.reporter import _build_svg_chart
 from winopt.storage import StorageManager, utc_now_iso
 from winopt.telemetry import collect_snapshot
+from winopt.win32_native import get_current_desktop_info
 from winopt.workload_guard import evaluate_workload_guard
 
 
@@ -240,6 +241,7 @@ class WebConsoleContext:
             "manual_actions": manual_actions,
             "job": self.get_job_snapshot(),
             "charts": charts,
+            "desktop_info": get_current_desktop_info(),
         }
 
     @staticmethod
@@ -394,6 +396,10 @@ def render_web_console_html(ctx: WebConsoleContext) -> str:
       <div class="meta" id="headerMeta">加载实时系统状态中...</div>
     </div>
     <div class="meta">仅限本机回环访问 <code>127.0.0.1</code> · CSRF 校验已启用</div>
+  </div>
+
+  <div class="banner" id="desktopGuardBanner" style="display:none;border-color:rgba(251,191,36,0.55);background:rgba(251,191,36,0.12);color:#fde68a;">
+    <span id="desktopGuardText"></span>
   </div>
 
   <div class="toolbar">
@@ -803,6 +809,16 @@ function renderStateSections() {{
       <td>${{esc(ph.rationale)}}</td>
     </tr>
   `).join("");
+
+  const desk = STATE.desktop_info;
+  const dBanner = document.getElementById("desktopGuardBanner");
+  const dText = document.getElementById("desktopGuardText");
+  if (desk && desk.is_default_desktop === false) {{
+    dText.textContent = `环境安全提示：当前控制台运行在隔离桌面 (${{desk.window_station}}\\\\${{desk.desktop}}) 而非正常交互桌面 (WinSta0\\\\Default)。为避免重启浏览器/GUI 软件后窗口隐身锁死，控制台已自动拦截 GUI 重启。请关闭本后台进程，在正常桌面双击 start_web_console.bat 启动！`;
+    dBanner.style.display = "flex";
+  }} else {{
+    dBanner.style.display = "none";
+  }}
 }}
 
 renderStateSections();

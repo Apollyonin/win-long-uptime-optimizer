@@ -103,6 +103,9 @@ if IS_WINDOWS:
     _kernel32.GetCurrentProcess.argtypes = []
     _kernel32.GetCurrentProcess.restype = wintypes.HANDLE
 
+    _kernel32.GetCurrentThreadId.argtypes = []
+    _kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+
     _kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
     _kernel32.OpenProcess.restype = wintypes.HANDLE
 
@@ -170,6 +173,21 @@ if IS_WINDOWS:
         wintypes.LPARAM,
     ]
     _user32.PostMessageW.restype = wintypes.BOOL
+
+    _user32.GetProcessWindowStation.argtypes = []
+    _user32.GetProcessWindowStation.restype = wintypes.HANDLE
+
+    _user32.GetThreadDesktop.argtypes = [wintypes.DWORD]
+    _user32.GetThreadDesktop.restype = wintypes.HANDLE
+
+    _user32.GetUserObjectInformationW.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    _user32.GetUserObjectInformationW.restype = wintypes.BOOL
 
     _ntdll.NtQueryTimerResolution.argtypes = [
         ctypes.POINTER(wintypes.ULONG),
@@ -426,6 +444,43 @@ def post_wm_close_to_pids(pids: set[int]) -> int:
     except Exception:
         pass
     return sent
+
+
+def get_current_desktop_info() -> dict[str, Any]:
+    """Return current Windows WindowStation & Desktop name and whether it is the interactive Default desktop."""
+    if not IS_WINDOWS or _user32 is None or _kernel32 is None:
+        return {"window_station": "N/A", "desktop": "N/A", "is_default_desktop": True}
+
+    UOI_NAME = 2
+    winsta_name = ""
+    desktop_name = ""
+    try:
+        hwinsta = _user32.GetProcessWindowStation()
+        if hwinsta:
+            buf = ctypes.create_unicode_buffer(256)
+            needed = wintypes.DWORD(0)
+            if _user32.GetUserObjectInformationW(
+                hwinsta, UOI_NAME, buf, ctypes.sizeof(buf), ctypes.byref(needed)
+            ):
+                winsta_name = buf.value
+
+        hdesk = _user32.GetThreadDesktop(_kernel32.GetCurrentThreadId())
+        if hdesk:
+            buf = ctypes.create_unicode_buffer(256)
+            needed = wintypes.DWORD(0)
+            if _user32.GetUserObjectInformationW(
+                hdesk, UOI_NAME, buf, ctypes.sizeof(buf), ctypes.byref(needed)
+            ):
+                desktop_name = buf.value
+    except Exception:
+        pass
+
+    is_default = (winsta_name.lower() == "winsta0") and (desktop_name.lower() == "default")
+    return {
+        "window_station": winsta_name or "Unknown",
+        "desktop": desktop_name or "Unknown",
+        "is_default_desktop": is_default,
+    }
 
 
 def sanitize_win32_check() -> dict[str, Any]:

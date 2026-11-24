@@ -9,6 +9,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import psutil
 
@@ -22,6 +23,7 @@ from winopt.process_control import (
     safe_trim_target,
 )
 from winopt.web_console import create_web_server
+from winopt.win32_native import get_current_desktop_info
 
 
 def _kill_pid_tree(pid: int | None) -> None:
@@ -93,10 +95,51 @@ class TestProcessControlAndWeb(unittest.TestCase):
         child_cmd = [exe, "--type=renderer", "--field-trial-handle=123"]
         self.assertEqual(build_relaunch_command(exe, child_cmd, "chrome.exe"), [exe])
 
+        chrome_cmd = [
+            exe,
+            "--profile-directory=Profile 1",
+            "--source-shortcut-location=taskbar",
+            "--flag-switches-begin",
+            "--flag-switches-end",
+            "--origin-trial-disabled-features=CanvasTextNg",
+        ]
+        self.assertEqual(
+            build_relaunch_command(exe, chrome_cmd, "chrome.exe"),
+            [exe, "--profile-directory=Profile 1"],
+        )
+
         normal_cmd = [exe, "-c", "import time; time.sleep(1)"]
         self.assertEqual(build_relaunch_command(exe, normal_cmd, "python.exe"), normal_cmd)
 
         self.assertEqual(build_relaunch_command(r"C:\Windows\explorer.exe", [], "explorer.exe"), ["explorer.exe"])
+
+    def test_non_default_desktop_blocks_gui_relaunch(self) -> None:
+        desk = get_current_desktop_info()
+        self.assertIn("window_station", desk)
+        self.assertIn("desktop", desk)
+        self.assertIn("is_default_desktop", desk)
+
+        fake_proc = MagicMock()
+        fake_proc.pid = 999990
+        fake_proc.name.return_value = "chrome.exe"
+        fake_proc.exe.return_value = sys.executable
+
+        with (
+            patch("winopt.process_control.IS_WINDOWS", True),
+            patch("winopt.process_control.resolve_targets_by_scope", return_value=(fake_proc, [fake_proc])),
+            patch(
+                "winopt.process_control.get_current_desktop_info",
+                return_value={
+                    "window_station": "WinSta0",
+                    "desktop": "exebox-test",
+                    "is_default_desktop": False,
+                },
+            ),
+        ):
+            res = safe_restart_target(999990, scope="group", relaunch=True)
+        self.assertFalse(res["ok"])
+        self.assertEqual(res["http_status"], 409)
+        self.assertIn("start_web_console.bat", res["message"])
 
     def test_real_tree_trim_and_restart_on_dummy_subprocess_tree(self) -> None:
         # Spawn dummy python parent -> child tree
